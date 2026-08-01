@@ -24,9 +24,9 @@ function consolidarFuturosFlujosRF() {
         if (exclude.includes(sheet.getName())) continue;
 
         let qty = 0;
-try { qty = sheet.getRange("K3").getValue(); } catch (e) { }
-if (typeof qty !== 'number' || qty <= 0) continue;
-if (qty === 100) continue; // Tenencia teórica de Bombonera (bono que no poseés) — excluir de la proyección real
+        try { qty = sheet.getRange("K3").getValue(); } catch (e) { }
+        if (typeof qty !== 'number' || qty <= 0) continue;
+        if (qty === 100) continue; // Tenencia teórica de Bombonera (bono que no poseés) — excluir de la proyección real
 
         let ticker = sheet.getName();
         try { let nM = sheet.getRange("L1").getValue(); if (nM && String(nM).trim() !== "") ticker = String(nM).trim().toUpperCase(); } catch (e) { }
@@ -61,18 +61,17 @@ if (qty === 100) continue; // Tenencia teórica de Bombonera (bono que no poseé
                 }
             }
         }
-for (let i = 2; i < data.length; i++) {
+
+        for (let i = 2; i < data.length; i++) {
             const row = data[i];
             let d = row[2];
 
-            // 🚑 EL FIX: Si la fecha es texto (porque le borraste la hora), la convierte a Fecha Real
             if (typeof d === 'string' && d.includes('/')) {
                 let partes = d.split('/');
                 if (partes.length === 3) d = new Date(partes[2], partes[1] - 1, partes[0]);
             }
 
             if (d instanceof Date && !isNaN(d) && d >= today) {
-                // 🚑 EL FIX: Lee los números incluso si Sheets los transformó en texto
                 let tA = parseFloat(String(row[3]).replace('%', '').replace(',', '.')) || 0;
                 let tAm = parseFloat(String(row[5]).replace('%', '').replace(',', '.')) || 0;
                 let valR = row[6];
@@ -120,7 +119,6 @@ function REGISTRADOR_CIERRE_DIARIO() {
 function SNAPSHOT_PRECIOS_HISTORICOS(ss, carteraDetallada) {
     try {
         const hojaHist = ss.getSheetByName(HOJAS.HIST);
-        // CCL ahora vive en Precios!B4
         const ccl = ss.getSheetByName(HOJAS.PRECIOS).getRange("B4").getValue() || 1000;
         const fechaHoy = new Date();
         let filasAGuardar = [];
@@ -150,26 +148,26 @@ function obtenerPrecioSPY(ss) {
         return 0;
     } catch (e) { return 0; }
 }
+
 // -----------------------------------------------------------------------
 // MENÚ UNIFICADO — única función onOpen() de todo el proyecto.
-// Ningún otro archivo (.gs) debe declarar onOpen().
 // -----------------------------------------------------------------------
 function onOpen() {
     SpreadsheetApp.getUi().createMenu('⚙️ TITANIUM')
         .addItem('🔄 Actualizar Flujos RF', 'consolidarFuturosFlujosRF')
+        .addItem('🏷️ Actualizar Universo y XIRR', 'actualizarUniversoYPorfolio')
         .addSeparator()
-        .addSubMenu(SpreadsheetApp.getUi().createMenu('🧾 Fiscal BP')
-            .addItem('📊 Generar Informe BP', 'GENERAR_INFORME_BIENES_PERSONALES'))
-        .addSubMenu(SpreadsheetApp.getUi().createMenu('📋 Auditoría')
-            .addItem('🔍 Generar Auditoría Completa', 'GENERAR_AUDITORIA_COMPLETA'))
-        .addSubMenu(SpreadsheetApp.getUi().createMenu('📊 Correlación Cedears')
-            .addItem('🔄 Generar Análisis completo (1 año)', 'generarAnalisisCompleto')
-            .addItem('🧹 Limpiar temporales', 'limpiarTemporales'))
+        .addItem('⚡ Instalación Automática de Triggers', 'instalarTodosLosTriggers')
         .addToUi();
 }
+
+function actualizarUniversoYPorfolio() {
+    actualizarUniversoTickers();
+    actualizarXirrCartera();
+}
+
 // -----------------------------------------------------------------------
-// INSTALADOR DE TRIGGER — consolidarFuturosFlujosRF()
-// Corre una vez por semana: viernes 6 AM
+// INSTALADORES DE TRIGGERS
 // -----------------------------------------------------------------------
 function instalarTriggerFlujosRF() {
     ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'consolidarFuturosFlujosRF').forEach(t => ScriptApp.deleteTrigger(t));
@@ -180,11 +178,7 @@ function instalarTriggerFlujosRF() {
         .create();
     console.log("✅ Trigger Flujos RF instalado: viernes 6 AM.");
 }
-// -----------------------------------------------------------------------
-// INSTALADOR DE TRIGGER — REGISTRADOR_CIERRE_DIARIO()
-// Corre todos los días a las 19hs (la propia función ya filtra fines de
-// semana internamente con fechaHoy.getDay()).
-// -----------------------------------------------------------------------
+
 function instalarTriggerCierreDiario() {
     ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'REGISTRADOR_CIERRE_DIARIO').forEach(t => ScriptApp.deleteTrigger(t));
     ScriptApp.newTrigger('REGISTRADOR_CIERRE_DIARIO')
@@ -193,4 +187,16 @@ function instalarTriggerCierreDiario() {
         .everyDays(1)
         .create();
     console.log("✅ Trigger Cierre Diario instalado: todos los días 21hs.");
+}
+
+// Master Installer: Instala y racionaliza todos los triggers requeridos
+function instalarTodosLosTriggers() {
+    instalarTriggerCCL();
+    instalarTriggerCAFCI();
+    instalarTriggerData912();
+    instalarTriggerFlujosRF();
+    instalarTriggerCierreDiario();
+    instalarTriggerUniversoTickers();
+    instalarTriggerXirrCartera();
+    console.log("🚀 Todos los triggers de TITANIUM v2 instalados y optimizados.");
 }
