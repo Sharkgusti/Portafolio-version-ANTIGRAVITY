@@ -35,7 +35,6 @@ function REGISTRAR_CCL_INTELIGENTE() {
 
         const precio = parseFloat(data.venta);
 
-        // Columnas Q=17, R=18. Buscamos la última fila CON DATO REAL en Q, no un número fijo.
         const COL_FECHA = 17, COL_PRECIO = 18;
         const ultimaFilaConDatos = hojaPrecios.getRange(1, COL_FECHA, hojaPrecios.getMaxRows(), 1)
             .getValues()
@@ -43,7 +42,6 @@ function REGISTRAR_CCL_INTELIGENTE() {
 
         let filaDestino = ultimaFilaConDatos + 1;
 
-        // Dedupe: si hoy ya se escribió, sobreescribimos esa fila en vez de duplicar
         if (ultimaFilaConDatos >= 2) {
             const fechaHoyVisual = Utilities.formatDate(ahora, tz, "d/M/yyyy");
             const valoresQ = hojaPrecios.getRange(2, COL_FECHA, ultimaFilaConDatos - 1, 1).getDisplayValues();
@@ -67,7 +65,6 @@ function REGISTRAR_CCL_INTELIGENTE() {
             celdaPrecio.setNumberFormat(formatoPrecioArriba);
         }
 
-        // Escritura directa del precio vigente — ya no depende de INDICE/CONTARA
         hojaPrecios.getRange("B4").setValue(precio);
 
         SpreadsheetApp.flush();
@@ -92,15 +89,15 @@ function ACTUALIZAR_PRECIOS_CAFCI() {
     }
 
     const FONDOS = [
-    { ticker: 'CAU$D',    codigoCAFCI: 2112, usarNativoUSD: false },
-    { ticker: 'CBIDEA',   codigoCAFCI: 2106, usarNativoUSD: false },
-    { ticker: 'CCREC2',   codigoCAFCI: 788,  usarNativoUSD: false },
-    { ticker: 'COPPORT',  codigoCAFCI: 338,  usarNativoUSD: false },
-    { ticker: 'COCORMA',  codigoCAFCI: 2517, usarNativoUSD: false },
-    { ticker: 'COCOSPPA', codigoCAFCI: 5496, usarNativoUSD: false },
-    { ticker: 'ALLFD',    codigoCAFCI: 5901, usarNativoUSD: true  },
-    { ticker: 'BAHUSD',   codigoCAFCI: 2096, usarNativoUSD: true  },
-];
+        { ticker: 'CAU$D',    codigoCAFCI: 2112, usarNativoUSD: false },
+        { ticker: 'CBIDEA',   codigoCAFCI: 2106, usarNativoUSD: false },
+        { ticker: 'CCREC2',   codigoCAFCI: 788,  usarNativoUSD: false },
+        { ticker: 'COPPORT',  codigoCAFCI: 338,  usarNativoUSD: false },
+        { ticker: 'COCORMA',  codigoCAFCI: 2517, usarNativoUSD: false },
+        { ticker: 'COCOSPPA', codigoCAFCI: 5496, usarNativoUSD: false },
+        { ticker: 'ALLFD',    codigoCAFCI: 5901, usarNativoUSD: true  },
+        { ticker: 'BAHUSD',   codigoCAFCI: 2096, usarNativoUSD: true  },
+    ];
 
     Logger.log('Descargando planilla diaria CAFCI...');
     let blob;
@@ -133,7 +130,6 @@ function ACTUALIZAR_PRECIOS_CAFCI() {
     try {
         const datosExcel = tempSheet.getSheets()[0].getDataRange().getValues();
 
-        // Índice por Código CAFCI (columna U = índice 20) — matching exacto, sin ambigüedad de texto
         const indicePorCodigo = {};
         for (let r = 10; r < datosExcel.length; r++) {
             const codigo = datosExcel[r][20];
@@ -141,20 +137,20 @@ function ACTUALIZAR_PRECIOS_CAFCI() {
         }
 
         for (const fondo of FONDOS) {
-    const fila = indicePorCodigo[fondo.codigoCAFCI];
-    if (fila === undefined) { Logger.log(`⚠️ No se encontró el código CAFCI ${fondo.codigoCAFCI} (${fondo.ticker}) hoy.`); continue; }
-    const row = datosExcel[fila];
-    const valorNativoRaw = row[5];
-    const valorReexpresadoRaw = row[8];
+            const fila = indicePorCodigo[fondo.codigoCAFCI];
+            if (fila === undefined) { Logger.log(`⚠️ No se encontró el código CAFCI ${fondo.codigoCAFCI} (${fondo.ticker}) hoy.`); continue; }
+            const row = datosExcel[fila];
+            const valorNativoRaw = row[5];
+            const valorReexpresadoRaw = row[8];
 
-    let valorFinalRaw = valorNativoRaw;
-    if (!fondo.usarNativoUSD && typeof valorReexpresadoRaw === 'number' && valorReexpresadoRaw > 0) {
-        valorFinalRaw = valorReexpresadoRaw;
-    }
-    if (typeof valorFinalRaw === 'number') {
-        preciosNuevos[fondo.ticker] = valorFinalRaw / 1000;
-    }
-}
+            let valorFinalRaw = valorNativoRaw;
+            if (!fondo.usarNativoUSD && typeof valorReexpresadoRaw === 'number' && valorReexpresadoRaw > 0) {
+                valorFinalRaw = valorReexpresadoRaw;
+            }
+            if (typeof valorFinalRaw === 'number') {
+                preciosNuevos[fondo.ticker] = valorFinalRaw / 1000;
+            }
+        }
     } catch (e) {
         Logger.log('Error al procesar Excel: ' + e.message);
     } finally {
@@ -182,11 +178,6 @@ function ACTUALIZAR_PRECIOS_CAFCI() {
     Logger.log('¡Actualización de Fondos CAFCI finalizada con éxito!');
 }
 
-// -----------------------------------------------------------------------
-// INSTALADOR — reemplaza instalarTriggerCompass(). Borra el trigger viejo
-// (nombre anterior) además del nuevo, para no dejar un trigger huérfano
-// apuntando a una función que ya no existe.
-// -----------------------------------------------------------------------
 function instalarTriggerCAFCI() {
     ScriptApp.getProjectTriggers().filter(t =>
         t.getHandlerFunction() === 'ACTUALIZAR_PRECIOS_COMPASS' ||
@@ -204,7 +195,8 @@ function instalarTriggerCAFCI() {
 
 // =================================================================================
 // 3. DATA912 — Cedears/Acciones/Bonos/ONs, desde fila 20
-//    FIX: solo se limpia/reescribe una categoría si su fetch fue exitoso
+//    FIX [C-3]: Preserva por categoría los datos viejos si el endpoint correspondiente falla,
+//    manteniendo exactamente el orden original del layout.
 // =================================================================================
 function actualizarPrecios() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -240,7 +232,6 @@ function actualizarPrecios() {
         "O Negociable": "https://data912.com/live/arg_corp"
     };
 
-    // fetchOk[tipo] = true solo si ese endpoint respondió bien
     const precios = {};
     const fetchOk = {};
 
@@ -265,41 +256,40 @@ function actualizarPrecios() {
         }
     });
 
-    // Si NINGÚN fetch tuvo éxito, no tocamos nada de la hoja
     if (!Object.values(fetchOk).some(v => v)) {
         console.warn("Ningún endpoint respondió. No se modifica Precios.");
         return;
     }
 
-    // --- Leer el estado actual del bloque (fila 20+) para preservar las categorías que fallaron ---
     const FILA_INICIO = 20;
     const ultimaFilaActual = hojaPrecios.getLastRow();
-    let bloqueViejo = { data: [], background: [] };
+    
+    const ordenCategorias = ["Cedear", "Acciones", "Bonos", "O Negociable"];
+    const bloquesViejosPorCategoria = {};
+    ordenCategorias.forEach(c => bloquesViejosPorCategoria[c] = []);
+
     if (ultimaFilaActual >= FILA_INICIO) {
         const rango = hojaPrecios.getRange(FILA_INICIO, 1, ultimaFilaActual - FILA_INICIO + 1, 2);
-        bloqueViejo.data = rango.getValues();
-        bloqueViejo.background = rango.getBackgrounds();
-    }
+        const dataVieja = rango.getValues();
+        const backgroundViejo = rango.getBackgrounds();
+        const numberFormatsViejos = rango.getNumberFormats();
 
-    // Identificar, dentro del bloque viejo, qué filas pertenecían a categorías que SÍ tuvieron éxito
-    // (esas se van a reescribir); las de categorías que fallaron, se preservan tal cual.
-    const ordenCategorias = ["Cedear", "Acciones", "Bonos", "O Negociable"];
-    let filasAPreservar = []; // filas viejas de categorías fallidas, para volver a pegarlas
-
-    if (bloqueViejo.data.length > 0) {
         let categoriaActual = null;
-        for (let i = 0; i < bloqueViejo.data.length; i++) {
-            const val = String(bloqueViejo.data[i][0] || "").trim();
+        for (let i = 0; i < dataVieja.length; i++) {
+            const val = String(dataVieja[i][0] || "").trim();
             if (ordenCategorias.map(c => c.toUpperCase()).includes(val.toUpperCase())) {
                 categoriaActual = ordenCategorias.find(c => c.toUpperCase() === val.toUpperCase());
             }
-            if (categoriaActual && !fetchOk[categoriaActual]) {
-                filasAPreservar.push({ fila: bloqueViejo.data[i], fondo: bloqueViejo.background[i] });
+            if (categoriaActual) {
+                bloquesViejosPorCategoria[categoriaActual].push({
+                    val: dataVieja[i],
+                    bg: backgroundViejo[i],
+                    fmt: numberFormatsViejos[i]
+                });
             }
         }
     }
 
-    // Limpiar todo el bloque (lo reconstruimos entero: éxitos con datos nuevos + fallos con datos preservados)
     if (ultimaFilaActual >= FILA_INICIO) {
         hojaPrecios.getRange(FILA_INICIO, 1, ultimaFilaActual - FILA_INICIO + 1, 2).clearContent().clearFormat();
     }
@@ -314,7 +304,6 @@ function actualizarPrecios() {
 
     ordenCategorias.forEach((tipo, idx) => {
         if (fetchOk[tipo]) {
-            // --- Categoría con datos frescos: reescribimos completa ---
             const tickers = [...grupos[tipo]].sort();
             if (tickers.length === 0) return;
 
@@ -343,26 +332,20 @@ function actualizarPrecios() {
                     .setNumberFormat("#,##0.00").setHorizontalAlignment("right");
                 filaActual++;
             });
-
         } else {
-            // --- Categoría que falló: repegamos las filas viejas tal cual estaban ---
-            const propias = filasAPreservar; // ya filtradas por categoría en el loop de arriba
-            // (nota: si hay varias categorías fallidas, filasAPreservar mezcla todas;
-            //  para simplicidad y robustez, si falló, mejor repegar TODO el bloque viejo completo)
+            const bloqueViejo = bloquesViejosPorCategoria[tipo];
+            if (bloqueViejo && bloqueViejo.length > 0) {
+                bloqueViejo.forEach(item => {
+                    hojaPrecios.getRange(filaActual, 1).setValue(item.val[0]).setBackground(item.bg[0]);
+                    hojaPrecios.getRange(filaActual, 2).setValue(item.val[1]).setBackground(item.bg[1]);
+                    if (item.fmt[1]) hojaPrecios.getRange(filaActual, 2).setNumberFormat(item.fmt[1]);
+                    filaActual++;
+                });
+            }
         }
 
-        if (idx < ordenCategorias.length - 1 && fetchOk[tipo]) filaActual++;
+        if (idx < ordenCategorias.length - 1) filaActual++;
     });
-
-    // Repegar TODO el conjunto de filas preservadas (categorías fallidas) al final del bloque nuevo
-    if (filasAPreservar.length > 0) {
-        filaActual++; // separador
-        filasAPreservar.forEach(item => {
-            hojaPrecios.getRange(filaActual, 1).setValue(item.fila[0]).setBackground(item.fondo[0]);
-            hojaPrecios.getRange(filaActual, 2).setValue(item.fila[1]).setBackground(item.fondo[1]);
-            filaActual++;
-        });
-    }
 
     hojaPrecios.setColumnWidth(1, 120);
     hojaPrecios.setColumnWidth(2, 140);
@@ -371,12 +354,12 @@ function actualizarPrecios() {
 }
 
 // =================================================================================
-// 4. INSTALADORES DE TRIGGERS (ejecutar cada uno UNA sola vez)
+// 4. INSTALADORES DE TRIGGERS
 // =================================================================================
 function instalarTriggerCCL() {
     ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'REGISTRAR_CCL_INTELIGENTE').forEach(t => ScriptApp.deleteTrigger(t));
     ScriptApp.newTrigger('REGISTRAR_CCL_INTELIGENTE').timeBased().everyMinutes(30).create();
-    console.log("✅ Trigger CCL instalado: cada 30 minutos (con filtro horario interno).");
+    console.log("✅ Trigger CCL instalado: cada 30 minutos.");
 }
 
 function instalarTriggerCompass() {
@@ -392,6 +375,6 @@ function instalarTriggerCompass() {
 
 function instalarTriggerData912() {
     ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'actualizarPrecios').forEach(t => ScriptApp.deleteTrigger(t));
-    ScriptApp.newTrigger('actualizarPrecios').timeBased().everyMinutes(15).create();
-    console.log("✅ Trigger data912 instalado: cada 15 minutos.");
+    ScriptApp.newTrigger('actualizarPrecios').timeBased().everyMinutes(30).create();
+    console.log("✅ Trigger data912 instalado: cada 30 minutos.");
 }
