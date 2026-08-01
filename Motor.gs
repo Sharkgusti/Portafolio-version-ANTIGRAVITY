@@ -13,18 +13,22 @@ const HOJAS = {
     QUANT: "Analisis_Quant"
 };
 
+// FIX [I-1]: HOY_SIMULADA siempre normalizado a medianoche para evitar
+// inconsistencias con comparaciones de fecha en Modified Dietz y XIRR.
 const HOY_SIMULADA = new Date();
+HOY_SIMULADA.setHours(0, 0, 0, 0);
+
 const FECHA_CORTE_CAJA = new Date('2026-02-01');
 const SALDO_INICIAL_CAJA = 14;
 
+// Constantes nombradas para magic numbers
+const TENENCIA_TEORICA_BOMBONERA = 100; // Tenencia teórica usada en hojas de bono de Bombonera
+
 // 1. API WEB APP
 function doGet(e) {
-  // Si entran con ?page=bombonera, ejecuta la función agregando () al final
   if (e && e.parameter && e.parameter.page === 'bombonera') {
     return doGetBombonera(); 
   }
-  
-  // Por defecto levanta el Titanium v2 original
   return HtmlService.createTemplateFromFile('Index')
       .evaluate()
       .setTitle('TITANIUM v2')
@@ -39,20 +43,20 @@ function generarDatosMaestros() {
     const logData = ss.getSheetByName(HOJAS.LOG).getDataRange().getValues();
     const preciosData = ss.getSheetByName(HOJAS.PRECIOS).getDataRange().getValues();
 
-    // CCL: ahora vive en Precios!B4 (fila "USD"), escrito directo por el script del CCL
+    // CCL: ahora vive en Precios!B4
     let ccl = 1000;
     try {
         const val = ss.getSheetByName(HOJAS.PRECIOS).getRange("B4").getValue();
         if (typeof val === 'number' && val > 500) ccl = val;
     } catch (e) { }
 
-    // Precios: tk -> { precio, var, moneda }  ("USD" | "PESOS" | "" )
+    // Precios: tk -> { precio, var, moneda }
     const precios = {};
     for (let i = 1; i < preciosData.length; i++) {
         let tk = String(preciosData[i][0]).toUpperCase().trim();
         let pr = cleanNum(preciosData[i][1]);
         let moneda = String(preciosData[i][2] || "").toUpperCase().trim();
-        let vr = cleanNum(preciosData[i][4]); // variación diaria, si existiera en col E
+        let vr = cleanNum(preciosData[i][4]);
         if (tk && pr > 0) precios[tk] = { precio: pr, var: vr, moneda: moneda };
     }
 
@@ -60,28 +64,24 @@ function generarDatosMaestros() {
     let realizedPL_RV = 0;
     let cfRV = [], cfRF = [], cfTOTAL = [];
     let cashflowsPorTicker = {};
-    let cajaVirtual = calcularCajaVirtual();
 
     let statsDivs = { tickers: {}, years: {}, total: 0 };
     let statsRenta = { tickers: {}, years: {}, total: 0 };
     let rentaHistorica12m = {};
     let fechaHaceUnAnio = new Date(); fechaHaceUnAnio.setFullYear(fechaHaceUnAnio.getFullYear() - 1);
 
-    // --- Tracking del costo total vivo SOLO de Renta Fija, para el Yield Realizado por año ---
-    // Cada vez que compra/venta/amortización de un instrumento RF cambian el costo, guardamos
-    // (fecha, costo total RF nuevo). La renta/interés NO mueve esto.
     let totalCostoVivoRF = 0;
     let costoEventsRF = [];
-    let gananciaRealizadaPorTickerAnio = {}; // { ticker: { año: monto } } — solo la parte YA cobrada/vendida
+    let gananciaRealizadaPorTickerAnio = {};
 
     const logSinHeader = logData.slice(1);
     logSinHeader.sort((a, b) => new Date(a[1]) - new Date(b[1]));
 
-    // --- Detección automática: tickers que NUNCA tuvieron un cupón/renta explícito ---
-    // (FCI, "Cartera admin", plazos fijos, bonos duales/LECAPs sin cupón corrido).
-    // Se evalúa sobre TODA la historia del log, así que no importa el orden de
-    // procesamiento: si en algún momento (pasado o futuro) el ticker paga un
-    // cupón real, queda excluido para siempre de la renta implícita.
+    // FIX [I-3]: calcularCajaVirtual recibe logSinHeader ya procesado — evita
+    // re-leer el Log completo desde Sheets por segunda vez.
+    let cajaVirtual = calcularCajaVirtual(logSinHeader);
+
+    // Detección automática de tickers con cupón/renta explícito
     let tickersConRentaExplicita = new Set();
     logSinHeader.forEach(row => {
         const tk = String(row[3]).toUpperCase().trim();
@@ -90,7 +90,7 @@ function generarDatosMaestros() {
             tickersConRentaExplicita.add(tk);
         }
     });
-    let unitEventsPorTicker = {}; // { ticker: [{d, q}] } — cantidad tenida a lo largo del tiempo
+    let unitEventsPorTicker = {};
 
     for (let i = 0; i < logSinHeader.length; i++) {
         const row = logSinHeader[i];
@@ -104,10 +104,6 @@ function generarDatosMaestros() {
         const ratioSplit = cleanNum(row[11]);
 
         if (!ticker) continue;
-
-        // ===============================================================
-        // FIX #1: USD/CASH nunca es una posición — se salta después de la caja
-        // ===============================================================
         if (ticker === 'USD' || ticker === 'CASH') continue;
 
         if (!portfolio[ticker]) portfolio[ticker] = { q: 0, costo: 0, costoOriginal: 0, tipo: tipoStr, cobrado: 0, wDate: null };
@@ -140,17 +136,12 @@ function generarDatosMaestros() {
         } else if (mov.includes('venta') || mov.includes('rescate') || mov.includes('canje_salida')) {
             if (p.q > 0) {
                 let ppc = p.costo / p.q;
-                // FIX: costoOriginal se descuenta con su propio ppc original, no el residual
                 let ppcOriginal = p.costoOriginal / p.q;
                 let costoVenta = ppc * cant;
                 let costoOriginalVenta = ppcOriginal * cant;
                 let ganancia = montoUSD - costoVenta;
 
                 if (esRV) realizedPL_RV += ganancia;
-                // Solo cuenta como "Realizada" en la tabla de Renta Fija si el ticker
-                // es de los "silenciosos" (nunca tuvo cupón explícito, ej. FCI/duales).
-                // La ganancia de VENDER un bono normal (con cupón real) a otro precio
-                // es trading, no renta — no pertenece a esta cuenta.
                 if (esRF && !tickersConRentaExplicita.has(ticker)) {
                     if (!gananciaRealizadaPorTickerAnio[ticker]) gananciaRealizadaPorTickerAnio[ticker] = {};
                     gananciaRealizadaPorTickerAnio[ticker][year] = (gananciaRealizadaPorTickerAnio[ticker][year] || 0) + ganancia;
@@ -199,16 +190,18 @@ function generarDatosMaestros() {
             if (montoUSD > p.costo) {
                 let gananciaExtra = montoUSD - p.costo;
                 p.costo = 0;
-                // Si el ticker tiene cupón explícito, sumamos directo (como siempre).
-                // Si NO lo tiene (silencioso), el Modified Dietz de más abajo ya
-                // captura este efecto vía "rescatesAnio" — sumarlo acá también sería duplicarlo.
                 if (tickersConRentaExplicita.has(ticker)) {
                     statsRenta.tickers[ticker] = (statsRenta.tickers[ticker] || 0) + gananciaExtra;
                     statsRenta.years[year] = (statsRenta.years[year] || 0) + gananciaExtra;
                     statsRenta.total += gananciaExtra;
                 }
-                if (!gananciaRealizadaPorTickerAnio[ticker]) gananciaRealizadaPorTickerAnio[ticker] = {};
-                gananciaRealizadaPorTickerAnio[ticker][year] = (gananciaRealizadaPorTickerAnio[ticker][year] || 0) + gananciaExtra;
+                // FIX [I-4]: Solo se registra como "realizada" para tickers CON renta explícita.
+                // Para los silenciosos (FCI, duales), el Modified Dietz ya captura este efecto
+                // vía rescatesAnio — agregarlo acá también generaría "noRealizada" negativo.
+                if (tickersConRentaExplicita.has(ticker)) {
+                    if (!gananciaRealizadaPorTickerAnio[ticker]) gananciaRealizadaPorTickerAnio[ticker] = {};
+                    gananciaRealizadaPorTickerAnio[ticker][year] = (gananciaRealizadaPorTickerAnio[ticker][year] || 0) + gananciaExtra;
+                }
             } else {
                 p.costo -= montoUSD;
             }
@@ -222,12 +215,8 @@ function generarDatosMaestros() {
             }
 
         } else if (mov.includes('split')) {
-            // ===============================================================
-            // FIX #4: Split y Contra-Split unificados.
             // Ratio_Split es SIEMPRE el multiplicador directo sobre cantidad.
             // Split 2x1 -> ratio=2 | Contra-Split 10x1 -> ratio=0.1
-            // El costo NUNCA se toca.
-            // ===============================================================
             if (ratioSplit > 0 && p.q > 0) {
                 p.q = p.q * ratioSplit;
                 unitEventsPorTicker[ticker].push({ d: fecha, q: p.q });
@@ -237,27 +226,21 @@ function generarDatosMaestros() {
 
     costoEventsRF.sort((a, b) => a.d - b.d);
 
-    // Lectura COMPLETA (sin submuestreo) — la necesitamos para calcular la
-    // renta implícita con precisión. hPrecios (más abajo) sigue siendo la
-    // versión recortada a 150 puntos, usada solo por el gráfico del modal.
+    // FIX [I-2]: Se lee el historial de precios UNA SOLA VEZ (completo) y se
+    // deriva la versión reducida para el gráfico del modal sin volver a leer Sheets.
     const hPreciosCompleto = leerHistPreciosCompleto(ss.getSheetByName(HOJAS.HIST));
+    const hPrecios = submuestrearHistPrecios(hPreciosCompleto, 150);
 
     // =====================================================================
-    // RENTA IMPLÍCITA — para tickers de Renta Fija que NUNCA pagaron un
-    // cupón explícito (FCI, Cartera admin, Plazos Fijos, duales/LECAPs sin
-    // cupón corrido). Usa Modified Dietz año por año: aísla la ganancia por
-    // variación de precio, sin que compras/rescates del período la distorsionen.
-    // Si el ticker se vendió del todo dentro del año, "valorFin" da 0 y la
-    // fórmula colapsa sola a "ganancia de venta" — mismo mecanismo sirve para
-    // los que mantenés hasta el vencimiento y para los que cotizan a diario.
+    // RENTA IMPLÍCITA — Modified Dietz año por año para tickers sin cupón explícito
     // =====================================================================
     Object.keys(unitEventsPorTicker).forEach(tk => {
-        if (tickersConRentaExplicita.has(tk)) return; // tiene cupón real, no tocar
+        if (tickersConRentaExplicita.has(tk)) return;
         const p = portfolio[tk];
         if (!p) return;
         const tipoNorm = normalizar(p.tipo);
         const esRFTk = tipoNorm !== 'Cedear' && tipoNorm !== 'Acciones';
-        if (!esRFTk) return; // esto es solo para Renta Fija / FCI / Cartera admin / Liquidez
+        if (!esRFTk) return;
 
         const eventosQ = unitEventsPorTicker[tk].slice().sort((a, b) => a.d - b.d);
         if (eventosQ.length === 0) return;
@@ -270,7 +253,7 @@ function generarDatosMaestros() {
                 if (preciosHist[i].d <= fecha) ultimo = preciosHist[i].p;
                 else break;
             }
-            return ultimo; // null si no hay ningún dato REAL disponible a esa fecha — no se inventa nada
+            return ultimo;
         };
         const buscarUnidades = (fecha) => {
             let ultimo = 0;
@@ -294,9 +277,6 @@ function generarDatosMaestros() {
             const precioInicio = (unidadesInicio > 0) ? buscarPrecio(inicioAnio) : 0;
             const precioFin = (unidadesFin > 0) ? buscarPrecio(corte) : 0;
 
-            // Si necesitábamos un precio real (porque había posición) y no lo tenemos
-            // (el histórico no llega tan atrás), NO calculamos este año — mejor
-            // "sin dato" que un número inventado con un precio de otra época.
             if ((unidadesInicio > 0 && precioInicio === null) || (unidadesFin > 0 && precioFin === null)) continue;
 
             const valorInicio = unidadesInicio * (precioInicio || 0);
@@ -333,8 +313,6 @@ function generarDatosMaestros() {
     });
     const resDivs = formatObj(statsDivs, statsDivs.total);
 
-    // Total realizado por año, sumado a través de TODOS los tickers (cupones normales +
-    // ventas + excedentes de amortización). "No realizado" = Total del año - Realizado.
     let realizadoPorAnio = {};
     Object.keys(gananciaRealizadaPorTickerAnio).forEach(tk => {
         Object.keys(gananciaRealizadaPorTickerAnio[tk]).forEach(anioStr => {
@@ -343,7 +321,6 @@ function generarDatosMaestros() {
         });
     });
 
-    // resRenta: igual que formatObj, pero con costoPromedio, yield, realizada y noRealizada por año
     const resRenta = {
         total: statsRenta.total,
         porTicker: Object.keys(statsRenta.tickers).map(k => ({ ticker: k, monto: statsRenta.tickers[k] })).sort((a, b) => b.monto - a.monto),
@@ -359,7 +336,7 @@ function generarDatosMaestros() {
         }).sort((a, b) => b.ano - a.ano)
     };
 
-    // Renta futura RF (tickers ya en pesos, sin necesidad de variantes D/O)
+    // Renta futura RF
     let rentaFutura12m = {};
     let fechaDentroUnAnio = new Date(); fechaDentroUnAnio.setFullYear(fechaDentroUnAnio.getFullYear() + 1);
     try {
@@ -385,23 +362,19 @@ function generarDatosMaestros() {
 
         let pxData = precios[tk] || { precio: 0, var: 0, moneda: "" };
         let precioARS = pxData.precio;
-        let monedaFlag = pxData.moneda; // "USD" | "PESOS" | ""
+        let monedaFlag = pxData.moneda;
         let valUSD = 0;
         let tipoNorm = normalizar(p.tipo);
 
-        // =====================================================================
-        // REGLA DE VALUACIÓN — reemplaza la heurística ">20 -> /100"
-        // =====================================================================
         if (tipoNorm === 'Bonos' || tipoNorm === 'ONs') {
             if (monedaFlag === 'USD') valUSD = precioARS * p.q;
             else if (monedaFlag === 'PESOS') valUSD = (precioARS / ccl) * p.q;
-            else valUSD = (precioARS / ccl / 100) * p.q; // default: cotiza por c/100 VN
+            else valUSD = (precioARS / ccl / 100) * p.q;
         } else if (tipoNorm === 'Cedear' || tipoNorm === 'Acciones') {
-            valUSD = (precioARS / ccl) * p.q; // Acciones locales y Cedears: siempre pesos
+            valUSD = (precioARS / ccl) * p.q;
         } else {
-            // FCI / Cartera admin / manuales
             if (monedaFlag === 'USD') valUSD = precioARS * p.q;
-            else valUSD = (precioARS / ccl) * p.q; // default PESOS
+            else valUSD = (precioARS / ccl) * p.q;
         }
 
         cashflowsPorTicker[tk].push({ d: HOY_SIMULADA, v: valUSD });
@@ -458,7 +431,6 @@ function generarDatosMaestros() {
     const qMetrics = leerQuant(ss.getSheetByName(HOJAS.QUANT));
     const histEvo = leerEvo(hojaEvo);
     const flujosFut = leerProyecciones(ss.getSheetByName(HOJAS.PROY));
-    const hPrecios = leerHistPrecios(ss.getSheetByName(HOJAS.HIST)); // versión recortada (150 pts), solo para el gráfico del modal
     const chartAcum = procesarFlujosAcumulativosMensuales(ss.getSheetByName(HOJAS.PROY));
     const chartSem = procesarFlujosSemestrales(ss.getSheetByName(HOJAS.PROY));
 
@@ -499,11 +471,12 @@ function generarDatosMaestros() {
         historicoPreciosActivos: hPrecios
     });
 }
+
 // =================================================================================
 // ===  MOTOR.GS — PARTE 2: FUNCIONES AUXILIARES                                ===
 // =================================================================================
 
-// XIRR — única implementación en todo el proyecto (reemplaza las 5-6 copias viejas)
+// XIRR — Newton-Raphson + bisección como fallback
 function calcXIRR(values, guess = 0.1) {
     if (!values || values.length < 2) return 0;
     let hasPos = false, hasNeg = false;
@@ -574,25 +547,18 @@ function calcXIRR(values, guess = 0.1) {
     for (let i = 0; i < maxIterBiseccion; i++) {
         mid = (lo + hi) / 2;
         vanMid = van(mid);
-
         if (isNaN(vanMid)) { hi = mid; continue; }
-        if (Math.abs(vanMid) < tolBiseccion || (hi - lo) / 2 < tolBiseccion) {
-            return mid;
-        }
-
+        if (Math.abs(vanMid) < tolBiseccion || (hi - lo) / 2 < tolBiseccion) return mid;
         if ((vanLo > 0 && vanMid > 0) || (vanLo < 0 && vanMid < 0)) {
             lo = mid; vanLo = vanMid;
         } else {
             hi = mid; vanHi = vanMid;
         }
     }
-
     return mid;
 }
 
-// -----------------------------------------------------------------------
 // COSTO PROMEDIO PONDERADO POR TIEMPO — para el Yield Realizado por año
-// -----------------------------------------------------------------------
 function calcCostoPromedioPonderado(costoEvents, anio, hoy) {
     const inicioAnio = new Date(anio, 0, 1);
     const finAnio = new Date(anio, 11, 31);
@@ -637,15 +603,20 @@ function cleanNum(v) {
     return parseFloat(s) || 0;
 }
 
-// Normalización de Tipo_Activo -> categoría estándar (sin "Otro", ya descartado)
+// Normalización de Tipo_Activo -> categoría estándar
 function normalizar(t) {
-    t = t.toLowerCase();
+    const original = t;
+    t = (t || '').toLowerCase();
     if (t.includes('cedear')) return 'Cedear';
     if (t.includes('accion')) return 'Acciones';
     if (t.includes('bono')) return 'Bonos';
     if (t.includes('negociable') || t.includes(' on')) return 'ONs';
     if (t.includes('fci')) return 'FCI';
     if (t.includes('cartera')) return 'Cartera';
+    // [M-1]: Log tipos no reconocidos para facilitar debugging
+    if (original && original.trim() !== '' && original.trim() !== 'undefined') {
+        console.warn('[normalizar] Tipo no reconocido: "' + original + '" → clasificado como Otros');
+    }
     return 'Otros';
 }
 
@@ -686,18 +657,23 @@ function calcDGR(stats) {
 
 function calcNextPay(lista) {
     if (!lista || lista.length === 0) return { tk: '---', days: 999, amt: 0, renta: 0, capital: 0, count: 0, tickers: [] };
+    // FIX [M-3]: Normalizar fecha a string YYYY-MM-DD para evitar problemas de zona horaria
     const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+    const hoyStr = hoy.toISOString().slice(0, 10);
 
     let proximaFecha = null;
     for (let f of lista) {
         let d = new Date(f.fecha);
+        d.setHours(0, 0, 0, 0);
         if (d >= hoy) { proximaFecha = d; break; }
     }
     if (!proximaFecha) return { tk: '---', days: 999, amt: 0, renta: 0, capital: 0, count: 0, tickers: [] };
 
+    const proximaStr = proximaFecha.toISOString().slice(0, 10);
     let pagosDelDia = lista.filter(f => {
         let d = new Date(f.fecha);
-        return d.getTime() === proximaFecha.getTime();
+        d.setHours(0, 0, 0, 0);
+        return d.toISOString().slice(0, 10) === proximaStr;
     });
 
     let totalRenta = 0, totalCapital = 0, tickers = [];
@@ -740,23 +716,13 @@ function leerProyecciones(h) {
     return { porFecha: d.filter(r => r[4] > 0).map(r => ({ ticker: r[0], fecha: r[1], renta: r[2], capital: r[3] })) };
 }
 
-function leerHistPrecios(h) {
-    if (!h) return {};
-    const d = h.getRange("A2:C" + h.getLastRow()).getValues();
-    const rawMap = {};
-    for (let i = 0; i < d.length; i++) {
-        const r = d[i];
-        if (r[1] && r[2] > 0 && r[0] instanceof Date) {
-            const tk = String(r[1]).toUpperCase().trim();
-            if (!rawMap[tk]) rawMap[tk] = [];
-            rawMap[tk].push([r[0].getTime(), r[2]]);
-        }
-    }
+// FIX [I-2]: leerHistPrecios ahora es una función PURA que no hace I/O.
+// Recibe el mapa completo ya cargado y lo reduce a MAX_POINTS por ticker.
+function submuestrearHistPrecios(rawMap, maxPoints) {
+    const MAX_POINTS = maxPoints || 150;
     const finalMap = {};
-    const MAX_POINTS = 150;
     Object.keys(rawMap).forEach(tk => {
         let points = rawMap[tk];
-        points.sort((a, b) => a[0] - b[0]);
         if (points.length <= MAX_POINTS) {
             finalMap[tk] = points;
         } else {
@@ -772,13 +738,9 @@ function leerHistPrecios(h) {
     return finalMap;
 }
 
-// -----------------------------------------------------------------------
-// Lectura COMPLETA de Historico_Precios, SIN submuestreo — a diferencia de
-// leerHistPrecios() (pensada para el gráfico del modal, que sí recorta a
-// 150 puntos por ticker), esta función se usa exclusivamente para cálculos
-// financieros (Renta Implícita / Modified Dietz) donde necesitamos el
-// precio EXACTO de una fecha límite, no una muestra representativa.
-// -----------------------------------------------------------------------
+// Lectura COMPLETA de Historico_Precios (sin submuestreo) — fuente única de I/O.
+// Tanto el gráfico del modal (submuestreado) como el Modified Dietz (completo)
+// derivan de esta única lectura.
 function leerHistPreciosCompleto(h) {
     if (!h) return {};
     const d = h.getRange("A2:C" + h.getLastRow()).getValues();
@@ -949,7 +911,7 @@ function actualizarUniversoTickers() {
 
     const FILA_USD = 90;
     const ccl = obtenerCCLActual();
-    const cajaVirtual = calcularCajaVirtual();
+    const cajaVirtual = calcularCajaVirtual(); // Aquí sí leemos desde Sheets (función standalone)
 
     hojaCartera.getRange(FILA_USD, COL_W, 1, 2).setValues([["USD", "Liquidez"]]);
     hojaCartera.getRange(FILA_USD, 25, 1, 5).setValues([[
@@ -960,7 +922,7 @@ function actualizarUniversoTickers() {
         cajaVirtual
     ]]);
 
-    console.log(`✅ Universo de tickers actualizado: ${filas.length} tickers vivos + fila USD (fila ${FILA_USD}) | ${Utilities.formatDate(new Date(), "America/Argentina/Buenos_Aires", "dd/MM/yyyy HH:mm:ss")}`);
+    console.log(`✅ Universo de tickers actualizado: ${filas.length} tickers vivos | ${Utilities.formatDate(new Date(), "America/Argentina/Buenos_Aires", "dd/MM/yyyy HH:mm:ss")}`);
 }
 
 function obtenerCCLActual() {
@@ -1060,11 +1022,19 @@ function instalarTriggerXirrCartera() {
 
 // -----------------------------------------------------------------------
 // CAJA VIRTUAL
+// FIX [I-3]: Acepta logSinHeader como parámetro opcional.
+// Si se llama desde generarDatosMaestros(), reutiliza el array ya cargado.
+// Si se llama standalone (ej. actualizarUniversoTickers()), lee desde Sheets.
 // -----------------------------------------------------------------------
-function calcularCajaVirtual() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const logData = ss.getSheetByName(HOJAS.LOG).getDataRange().getValues();
-    const logSinHeader = logData.slice(1);
+function calcularCajaVirtual(logSinHeaderExterno) {
+    let logSinHeader;
+    if (logSinHeaderExterno) {
+        logSinHeader = logSinHeaderExterno;
+    } else {
+        const ss = SpreadsheetApp.getActiveSpreadsheet();
+        const logData = ss.getSheetByName(HOJAS.LOG).getDataRange().getValues();
+        logSinHeader = logData.slice(1);
+    }
 
     let cajaVirtual = SALDO_INICIAL_CAJA;
 
