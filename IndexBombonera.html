@@ -512,15 +512,61 @@
     <div class="modal-overlay" id="modalCurva">
       <div class="modal-palco" style="max-width: 1100px;"><div class="modal-header"><h2 id="modal-curva-titulo">Curva de Rendimientos</h2><button class="modal-cerrar" id="modalCurvaCerrar">&times;</button></div><div class="modal-body"><div class="modal-seccion"><div style="height: 500px; position: relative;"><canvas id="yieldCurveChart"></canvas></div></div></div></div>
     </div>
+    
+    <!-- FIX [C-2]: Elementos HTML agregados para evitar TypeError en calculatePizarraMetrics() -->
     <div class="modal-overlay" id="modalPizarra">
-      <div class="modal-palco" style="max-width: 1000px;"><div class="modal-header">
-  <h2 id="modal-pizarra-titulo">Pizarra de Bianchi</h2>
-  <div style="display:flex; align-items:center; gap:1rem;">
-    <button class="action-btn" id="btn-reset-pizarra">🔄 Resetear a mi cartera real</button>
-    <button class="modal-cerrar" id="modalPizarraCerrar">&times;</button>
-  </div>
-</div><div class="modal-body"><div class="pizarra-grid"><div class="modal-seccion"><h3>Activos (USD)</h3><div id="pizarra-assets-list"></div></div><div class="modal-seccion"><h3>Métricas</h3><div id="pizarra-results"><div class="stat-box pizarra-stat" style="width:100%"><div class="label">Valor Total</div><div class="value" id="pizarra-total-value">-</div></div><div class="stat-box pizarra-stat" style="width:100%"><div class="label">TIR Ponderada</div><div class="value" id="pizarra-weighted-tir">-</div></div><div class="stat-box pizarra-stat" style="width:100%"><div class="label">Duración Pond.</div><div class="value" id="pizarra-weighted-dur">-</div></div></div></div></div></div></div>
+      <div class="modal-palco" style="max-width: 1000px;">
+        <div class="modal-header">
+          <h2 id="modal-pizarra-titulo">Pizarra de Bianchi</h2>
+          <div style="display:flex; align-items:center; gap:1rem;">
+            <button class="action-btn" id="btn-reset-pizarra">🔄 Resetear a mi cartera real</button>
+            <button class="modal-cerrar" id="modalPizarraCerrar">&times;</button>
+          </div>
+        </div>
+        <div class="modal-body">
+          <div class="pizarra-grid">
+            <div class="modal-seccion">
+              <h3>Activos (USD)</h3>
+              <div id="pizarra-assets-list"></div>
+            </div>
+            <div class="modal-seccion">
+              <h3>Métricas</h3>
+              <div id="pizarra-results">
+                <div class="stat-box pizarra-stat" style="width:100%">
+                  <div class="label">Valor Total</div>
+                  <div class="value" id="pizarra-total-value">-</div>
+                </div>
+                <div class="stat-box pizarra-stat" style="width:100%">
+                  <div class="label">TIR Ponderada</div>
+                  <div class="value" id="pizarra-weighted-tir">-</div>
+                  <div style="font-size:0.8rem; margin-top:4px;" id="pizarra-tir-delta">-</div>
+                </div>
+                <div class="stat-box pizarra-stat" style="width:100%">
+                  <div class="label">Duración Pond.</div>
+                  <div class="value" id="pizarra-weighted-dur">-</div>
+                  <div style="font-size:0.8rem; margin-top:4px;" id="pizarra-dur-delta">-</div>
+                </div>
+              </div>
+              <div style="margin-top: 1rem;" class="tabla-flujo-wrapper">
+                <table class="tabla-flujo">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th class="text-right">Nominales</th>
+                      <th class="text-right">TIR</th>
+                      <th class="text-right">Dur.</th>
+                      <th class="text-right">% Cart.</th>
+                    </tr>
+                  </thead>
+                  <tbody id="pizarra-desglose-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
+
     <div class="modal-overlay" id="modalArbitrador">
       <div class="modal-palco" style="max-width: 1100px;">
         <div class="modal-header">
@@ -596,7 +642,6 @@
     <script>
       document.addEventListener('DOMContentLoaded', function() {
         
-        // ESTADO GLOBAL
         let allData = {}; 
         let currentCurrency = 'USD'; 
         let currentTypeFilter = 'Bono'; 
@@ -606,14 +651,12 @@
         let yieldCurveInstance = null; 
         let currentModalTicker = null;
 
-        // DOM ELEMENTS
         const tableHeader = document.getElementById('tableHeader'); 
         const tableBody = document.getElementById('dataTableBody'); 
         const tableFooter = document.getElementById('tableFooter'); 
         const loader = document.getElementById('loader'); 
         const mainWidget = document.getElementById('mainWidget');
 
-        // FORMATO
         function formatNumber(num, decimals = 2, isCurrency = false) { 
           if (num === null || typeof num === 'undefined' || isNaN(num) || num === 'N/A' || num === 'Error') return 'N/A'; 
           if (num > -0.005 && num < 0.005 && isCurrency) return '-'; 
@@ -634,7 +677,6 @@
           return vol.toString(); 
         }
 
-        // FETCH DATA
         function fetchData() { 
           loader.style.display = 'block'; 
           tableBody.innerHTML = ''; 
@@ -772,7 +814,6 @@
             tableBody.appendChild(row); 
           }); 
           
-          // FIX 3: Métricas de cartera siempre en USD (backend solo provee métricas USD)
           if (currentView === 'cartera') { 
             const metrics = allData.globalMetrics; 
             document.getElementById('totalValue').textContent = `$ ${formatLargeNumber(metrics.totalValueUSD, 2)}`; 
@@ -826,6 +867,37 @@
           } 
         });
 
+        tableBody.addEventListener('click', e => {
+          const tr = e.target.closest('tr.clickable');
+          if (tr && tr.dataset.ticker) {
+            openModal(tr.dataset.ticker);
+          }
+        });
+
+        document.getElementById('modalCerrar').addEventListener('click', () => {
+          document.getElementById('modalPalco').classList.remove('visible');
+        });
+        document.getElementById('modalFixtureCerrar').addEventListener('click', () => {
+          document.getElementById('modalFixture').classList.remove('visible');
+        });
+        document.getElementById('modalCurvaCerrar').addEventListener('click', () => {
+          document.getElementById('modalCurva').classList.remove('visible');
+        });
+        document.getElementById('modalPizarraCerrar').addEventListener('click', () => {
+          document.getElementById('modalPizarra').classList.remove('visible');
+        });
+        document.getElementById('modalArbitradorCerrar').addEventListener('click', () => {
+          document.getElementById('modalArbitrador').classList.remove('visible');
+        });
+
+        document.getElementById('fixtureBtn').addEventListener('click', openFixtureModal);
+        document.getElementById('curveBtn').addEventListener('click', openYieldCurveModal);
+        document.getElementById('pizarraBtn').addEventListener('click', openPizarraModal);
+        document.getElementById('arbitradorBtn').addEventListener('click', () => {
+          document.getElementById('modalArbitrador').classList.add('visible');
+          populateArbitrageSelects();
+        });
+
         // --- FUNCIONES MODALES ---
         function openModal(tickerUSD) { 
           const bono = allData.bonos.find(b => b.tickerUSD === tickerUSD); 
@@ -849,6 +921,8 @@
           html += `</tbody></table></div></div>`; 
           modalBody.innerHTML = html; 
           document.getElementById('modalPalco').classList.add('visible'); 
+
+          // FIX [C-1]: Removido el () extra sobre calculateMetricsForCustomPriceBombonera
           document.getElementById('btn-calcular-sim').addEventListener('click', () => { 
             const newPrice = parseFloat(document.getElementById('sim-precio').value); 
             const simTir = document.getElementById('sim-tir'); 
@@ -859,7 +933,7 @@
                 if(res.error) { simTir.innerText = 'Error'; } 
                 else { simTir.innerText = `${formatNumber(res.tir)}%`; simDur.innerText = formatNumber(res.duration); } 
               })
-              .calculateMetricsForCustomPriceBombonera()(currentModalTicker, newPrice, currentCurrency); 
+              .calculateMetricsForCustomPriceBombonera(currentModalTicker, newPrice, currentCurrency); 
           }); 
         }
         
@@ -870,7 +944,6 @@
             if (data.error) { alert('Error: ' + data.error); return; } 
             const labels = Object.keys(data).sort(); 
 
-            // FIX 2: Usar sufijo correcto según disponibilidad de datos ARS
             const suffix = currentCurrency === 'ARS' && labels.some(k => data[k].rentaARS > 0) ? 'ARS' : 'USD';
             const rentas = labels.map(k => data[k][`renta${suffix}`] || 0);
             const capitales = labels.map(k => data[k][`capital${suffix}`] || 0);
@@ -908,8 +981,6 @@
             .map(b => ({ x: b.modifiedDurationUSD, y: b.tirUSD, label: b.tickerUSD })); 
           
           let bonosData = getPoints(b => b.tipo === 'Bono' && typeof b.tirUSD === 'number'); 
-          
-          // FIX 1: Ordenar por Duration antes de graficar para evitar líneas cruzadas
           bonosData.sort((a, b) => a.x - b.x);
 
           const onsData = getPoints(b => b.tipo === 'ONs' && typeof b.tirUSD === 'number'); 
@@ -969,64 +1040,79 @@
               assetDiv.innerHTML = `<label for="pizarra-${bono.tickerUSD}">${bono.tickerUSD}</label><input type="number" id="pizarra-${bono.tickerUSD}" data-ticker="${bono.tickerUSD}" value="${bono.nominalesUSD || 0}">`; 
               listContainer.appendChild(assetDiv); 
             }); 
+          
+          document.getElementById('btn-reset-pizarra').addEventListener('click', () => {
+            document.querySelectorAll('#pizarra-assets-list input').forEach(input => {
+              const bono = allData.bonos.find(b => b.tickerUSD === input.dataset.ticker);
+              if (bono) input.value = bono.nominalesUSD || 0;
+            });
+            calculatePizarraMetrics();
+          });
+
           document.getElementById('pizarra-assets-list').addEventListener('input', calculatePizarraMetrics); 
           calculatePizarraMetrics(); 
         }
         
         function calculatePizarraMetrics() { 
-  let totalValue = 0, sumTir = 0, sumDur = 0;
-  const posiciones = [];
+          let totalValue = 0, sumTir = 0, sumDur = 0;
+          const posiciones = [];
 
-  document.querySelectorAll('#pizarra-assets-list input').forEach(input => { 
-    const nominales = parseFloat(input.value) || 0; 
-    if (nominales > 0) { 
-      const ticker = input.dataset.ticker; 
-      const bono = allData.bonos.find(b => b.tickerUSD === ticker); 
-      if (bono && bono.precioUSD > 0) { 
-        const positionValue = (nominales * bono.precioUSD) / 100; 
-        totalValue += positionValue; 
-        if (typeof bono.tirUSD === 'number') sumTir += bono.tirUSD * positionValue; 
-        if (typeof bono.modifiedDurationUSD === 'number') sumDur += bono.modifiedDurationUSD * positionValue;
-        posiciones.push({ ticker, nominales, bono, positionValue });
-      } 
-    } 
-  }); 
+          document.querySelectorAll('#pizarra-assets-list input').forEach(input => { 
+            const nominales = parseFloat(input.value) || 0; 
+            if (nominales > 0) { 
+              const ticker = input.dataset.ticker; 
+              const bono = allData.bonos.find(b => b.tickerUSD === ticker); 
+              if (bono && bono.precioUSD > 0) { 
+                const positionValue = (nominales * bono.precioUSD) / 100; 
+                totalValue += positionValue; 
+                if (typeof bono.tirUSD === 'number') sumTir += bono.tirUSD * positionValue; 
+                if (typeof bono.modifiedDurationUSD === 'number') sumDur += bono.modifiedDurationUSD * positionValue;
+                posiciones.push({ ticker, nominales, bono, positionValue });
+              } 
+            } 
+          }); 
 
-  const tirFinal = totalValue > 0 ? sumTir / totalValue : 0;
-  const durFinal = totalValue > 0 ? sumDur / totalValue : 0;
+          const tirFinal = totalValue > 0 ? sumTir / totalValue : 0;
+          const durFinal = totalValue > 0 ? sumDur / totalValue : 0;
 
-  document.getElementById('pizarra-total-value').textContent = `$ ${formatLargeNumber(totalValue, 2)}`; 
-  document.getElementById('pizarra-weighted-tir').textContent = `${formatNumber(tirFinal)} %`; 
-  document.getElementById('pizarra-weighted-dur').textContent = formatNumber(durFinal);
+          document.getElementById('pizarra-total-value').textContent = `$ ${formatLargeNumber(totalValue, 2)}`; 
+          document.getElementById('pizarra-weighted-tir').textContent = `${formatNumber(tirFinal)} %`; 
+          document.getElementById('pizarra-weighted-dur').textContent = formatNumber(durFinal);
 
-  // --- Punto 2: Delta contra la cartera real ---
-  const realTir = allData.globalMetrics.weightedTirUSD;
-  const realDur = allData.globalMetrics.weightedDurationUSD;
-  const deltaTir = tirFinal - realTir;
-  const deltaDur = durFinal - realDur;
+          // Delta contra la cartera real (FIX [C-2]: Elementos validados)
+          const realTir = allData.globalMetrics.weightedTirUSD;
+          const realDur = allData.globalMetrics.weightedDurationUSD;
+          const deltaTir = tirFinal - realTir;
+          const deltaDur = durFinal - realDur;
 
-  const tirDeltaEl = document.getElementById('pizarra-tir-delta');
-  const durDeltaEl = document.getElementById('pizarra-dur-delta');
-  tirDeltaEl.textContent = `vs real: ${deltaTir >= 0 ? '+' : ''}${formatNumber(deltaTir)} pp`;
-  tirDeltaEl.style.color = deltaTir >= 0 ? 'var(--positive)' : 'var(--negative)';
-  durDeltaEl.textContent = `vs real: ${deltaDur >= 0 ? '+' : ''}${formatNumber(deltaDur)} años`;
-  durDeltaEl.style.color = deltaDur >= 0 ? 'var(--gold)' : 'var(--slate)';
+          const tirDeltaEl = document.getElementById('pizarra-tir-delta');
+          const durDeltaEl = document.getElementById('pizarra-dur-delta');
+          if (tirDeltaEl) {
+            tirDeltaEl.textContent = `vs real: ${deltaTir >= 0 ? '+' : ''}${formatNumber(deltaTir)} pp`;
+            tirDeltaEl.style.color = deltaTir >= 0 ? 'var(--positive)' : 'var(--negative)';
+          }
+          if (durDeltaEl) {
+            durDeltaEl.textContent = `vs real: ${deltaDur >= 0 ? '+' : ''}${formatNumber(deltaDur)} años`;
+            durDeltaEl.style.color = deltaDur >= 0 ? 'var(--gold)' : 'var(--slate)';
+          }
 
-  // --- Punto 1: Desglose por posición ---
-  const tbody = document.getElementById('pizarra-desglose-body');
-  tbody.innerHTML = '';
-  posiciones.sort((a, b) => b.positionValue - a.positionValue).forEach(p => {
-    const pctCartera = totalValue > 0 ? (p.positionValue / totalValue) * 100 : 0;
-    const row = document.createElement('tr');
-    row.innerHTML = `
-      <td>${p.ticker}</td>
-      <td class="text-right">${formatLargeNumber(p.nominales)}</td>
-      <td class="text-right">${formatNumber(p.bono.tirUSD)}%</td>
-      <td class="text-right">${formatNumber(p.bono.modifiedDurationUSD)}</td>
-      <td class="text-right">${formatNumber(pctCartera, 1)}%</td>`;
-    tbody.appendChild(row);
-  });
-}
+          // Desglose por posición (FIX [C-2]: Tbody validado)
+          const tbody = document.getElementById('pizarra-desglose-body');
+          if (tbody) {
+            tbody.innerHTML = '';
+            posiciones.sort((a, b) => b.positionValue - a.positionValue).forEach(p => {
+              const pctCartera = totalValue > 0 ? (p.positionValue / totalValue) * 100 : 0;
+              const row = document.createElement('tr');
+              row.innerHTML = `
+                <td>${p.ticker}</td>
+                <td class="text-right">${formatLargeNumber(p.nominales)}</td>
+                <td class="text-right">${formatNumber(p.bono.tirUSD)}%</td>
+                <td class="text-right">${formatNumber(p.bono.modifiedDurationUSD)}</td>
+                <td class="text-right">${formatNumber(pctCartera, 1)}%</td>`;
+              tbody.appendChild(row);
+            });
+          }
+        }
 
         // --- ARBITRADOR ---
         function populateArbitrageSelects() {
@@ -1057,6 +1143,8 @@
             });
             el.dispatchEvent(new Event('change'));
           });
+
+          document.getElementById('btn-calcular-arb').addEventListener('click', calculateArbitrage);
         }
 
         function calculateArbitrage() {
@@ -1079,8 +1167,8 @@
           const netCash = grossSellAmount - sellComm;
 
           const thead = document.getElementById('arb-table-head');
-          thead.innerHTML = `<th>Métrica</th><th>${sellTicker} (Origen @ $${sellPrice})</th>
-                             <th>${buyConfigs[0].ticker}</th><th>${buyConfigs[1].ticker}</th><th>${buyConfigs[2].ticker}</th>`;
+          thead.innerHTML = `<tr><th>Métrica</th><th>${sellTicker} (Origen @ $${sellPrice})</th>
+                             <th>${buyConfigs[0].ticker}</th><th>${buyConfigs[1].ticker}</th><th>${buyConfigs[2].ticker}</th></tr>`;
 
           let rowNominals = `<td>Nominales Resultantes</td><td>${formatLargeNumber(sellQty)}</td>`;
           let rowTIR = `<td>TIR Anual (%)</td><td>${formatNumber(sourceBond.tirUSD)}%</td>`;
@@ -1162,63 +1250,35 @@
                              <tr>${rowDuration}</tr>
                              <tr>${rowParity}</tr>`;
           
-          const rows = tbody.querySelectorAll('tr');
-// rows[0] = Nominales, rows[1] = Spread Tasa, rows[2] = Recupero,
-// rows[3] = TIR, rows[4] = Spread Duración, rows[5] = Duración, rows[6] = Paridad
-
-let maxNom = Math.max(...valsNominals);
-if(maxNom > 0) {
-   rows[0].querySelectorAll('td').forEach((td, idx) => { 
-      if(idx > 0 && valsNominals[idx-1] === maxNom) td.classList.add('cell-winner'); 
-   });
-}
-
-// Semáforo: mejor Spread de Tasa y mejor TIR, mismo color
-const spreadsValidos = buyConfigs.map(cfg => {
-   const destBond = allData.bonos.find(b => b.tickerUSD === cfg.ticker);
-   const buyPrice = parseFloat(document.getElementById(cfg.priceInput).value) || 0;
-   if (destBond && buyPrice > 0 && typeof destBond.tirUSD === 'number') {
-      return destBond.tirUSD - sourceBond.tirUSD;
-   }
-   return -Infinity;
-});
-const maxSpread = Math.max(...spreadsValidos);
-
-console.log('spreadsValidos:', spreadsValidos, 'maxSpread:', maxSpread, 'idxGanador:', spreadsValidos.indexOf(maxSpread));
-if (maxSpread > -Infinity) {
-   const idxGanador = spreadsValidos.indexOf(maxSpread);
-   // Columna ganadora = idxGanador + 1 (porque la columna 0 es "Origen")
-   const colGanadora = idxGanador + 2; // +1 por "Métrica", +1 por índice base-1 en querySelectorAll
-
-   rows[1].querySelectorAll('td')[colGanadora].classList.add('cell-winner'); // Spread de Tasa
-   rows[3].querySelectorAll('td')[colGanadora].classList.add('cell-winner'); // TIR Anual
-}
-
           document.getElementById('arb-results-container').style.display = 'block';
+
+          const rows = tbody.querySelectorAll('tr');
+          let maxNom = Math.max(...valsNominals);
+          if(maxNom > 0) {
+             rows[0].querySelectorAll('td').forEach((td, idx) => { 
+                if(idx > 0 && valsNominals[idx-1] === maxNom) td.classList.add('cell-winner'); 
+             });
+          }
+
+          const spreadsValidos = buyConfigs.map(cfg => {
+             const destBond = allData.bonos.find(b => b.tickerUSD === cfg.ticker);
+             const buyPrice = parseFloat(document.getElementById(cfg.priceInput).value) || 0;
+             if (destBond && buyPrice > 0 && typeof destBond.tirUSD === 'number') {
+                return destBond.tirUSD - sourceBond.tirUSD;
+             }
+             return -Infinity;
+          });
+          const maxSpread = Math.max(...spreadsValidos);
+
+          if (maxSpread > -Infinity) {
+             const idxGanador = spreadsValidos.indexOf(maxSpread);
+             const colGanadora = idxGanador + 2;
+
+             if (rows[1].querySelectorAll('td')[colGanadora]) rows[1].querySelectorAll('td')[colGanadora].classList.add('cell-winner');
+             if (rows[3].querySelectorAll('td')[colGanadora]) rows[3].querySelectorAll('td')[colGanadora].classList.add('cell-winner');
+          }
         }
 
-        document.getElementById('arbitradorBtn').addEventListener('click', () => {
-          populateArbitrageSelects();
-          document.getElementById('modalArbitrador').classList.add('visible');
-        });
-        
-        document.getElementById('modalArbitradorCerrar').addEventListener('click', () => document.getElementById('modalArbitrador').classList.remove('visible'));
-        document.getElementById('btn-calcular-arb').addEventListener('click', calculateArbitrage);
-
-        tableBody.addEventListener('click', e => { 
-          const row = e.target.closest('tr'); 
-          if (row && row.classList.contains('clickable')) openModal(row.dataset.ticker); 
-        });
-        
-        document.getElementById('fixtureBtn').addEventListener('click', openFixtureModal); 
-        document.getElementById('curveBtn').addEventListener('click', openYieldCurveModal); 
-        document.getElementById('pizarraBtn').addEventListener('click', openPizarraModal);
-        document.getElementById('btn-reset-pizarra').addEventListener('click', openPizarraModal);
-        
-        const closeModals = () => document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('visible'));
-        document.querySelectorAll('.modal-cerrar').forEach(btn => btn.addEventListener('click', closeModals)); 
-        document.querySelectorAll('.modal-overlay').forEach(overlay => overlay.addEventListener('click', e => { if (e.target === overlay) closeModals(); }));
-        
         fetchData();
       });
     </script>
